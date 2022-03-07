@@ -3,6 +3,15 @@ import argparse
 DATASETS = ['sent140', 'femnist', 'shakespeare', 'celeba', 'synthetic', 'reddit']
 SIM_TIMES = ['small', 'medium', 'large']
 
+def str2bool(v):
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ("yes", "true", "t", "y", "1"):
+        return True
+    elif v.lower() in ("no", "false", "f", "n", "0"):
+        return False
+    else:
+        raise argparse.ArgumentTypeError("Boolean value expected.")
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -49,6 +58,31 @@ def parse_args():
     parser.add_argument('--use-val-set', 
                     help='use validation set;', 
                     action='store_true')
+    parser.add_argument("--agg-fn",
+                    help='aggregation funciton',
+                    type=str,
+                    default="none-uniform",
+                    required=False
+    )
+
+    # wandb initilization
+    parser.add_argument(
+        "--enable-wandb",
+        type=str2bool,
+        default=True
+    )
+    parser.add_argument(
+        "--wandb-project",
+        type=str,
+        default="quantity",
+        required=False
+    )
+    parser.add_argument(
+        "--wandb-run",
+        type=str,
+        default="",
+        required=False
+    )
 
     # Minibatch doesn't support num_epochs, so make them mutually exclusive
     epoch_capability_group = parser.add_mutually_exclusive_group()

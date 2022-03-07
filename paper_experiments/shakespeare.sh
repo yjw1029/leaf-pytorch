@@ -27,7 +27,7 @@ function run_experiment() {
     num_epochs="${1}"
     pushd models/
         python -u main.py -dataset shakespeare -model stacked_lstm --seed 0 --num-rounds 80 \
-                  --clients-per-round 10 --num_epochs ${num_epochs} -lr 0.8
+                  --clients-per-round 10 --num-epochs ${num_epochs} -lr 0.8
     popd
     move_data ${output_dir} "shakespeare_c_10_rnd_80_e_${num_epochs}"
 }

@@ -1,5 +1,7 @@
 # LEAF: A Benchmark for Federated Settings
 
+Pytorch implementation of "Leaf: A Benchmark for Federated Settings"
+
 ## Resources
 
   * **Homepage:** [leaf.cmu.edu](https://leaf.cmu.edu)

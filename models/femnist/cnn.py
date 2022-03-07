@@ -1,54 +1,43 @@
-import tensorflow as tf
+import torch
+from torch import nn 
 
 from model import Model
-import numpy as np
-
-
 IMAGE_SIZE = 28
-
 
 class ClientModel(Model):
     def __init__(self, seed, lr, num_classes):
+        super().__init__(seed, lr)
         self.num_classes = num_classes
-        super(ClientModel, self).__init__(seed, lr)
+        self.conv1 = nn.Conv2d(in_channels=1, out_channels=32, kernel_size=(5, 5), padding="same")
+        self.relu = nn.ReLU()
+        self.pool1 = nn.MaxPool2d(kernel_size=(2,2), stride=2)
+        self.conv2 = nn.Conv2d(in_channels=32, out_channels=64, kernel_size=(5, 5), padding="same")
+        self.pool2 = nn.MaxPool2d(kernel_size=(2,2), stride=2)
+        self.l1 = nn.Linear(7 * 7 * 64, 2048)
+        self.l2 = nn.Linear(2048, self.num_classes)
 
-    def create_model(self):
-        """Model function for CNN."""
-        features = tf.placeholder(
-            tf.float32, shape=[None, IMAGE_SIZE * IMAGE_SIZE], name='features')
-        labels = tf.placeholder(tf.int64, shape=[None], name='labels')
-        input_layer = tf.reshape(features, [-1, IMAGE_SIZE, IMAGE_SIZE, 1])
-        conv1 = tf.layers.conv2d(
-          inputs=input_layer,
-          filters=32,
-          kernel_size=[5, 5],
-          padding="same",
-          activation=tf.nn.relu)
-        pool1 = tf.layers.max_pooling2d(inputs=conv1, pool_size=[2, 2], strides=2)
-        conv2 = tf.layers.conv2d(
-            inputs=pool1,
-            filters=64,
-            kernel_size=[5, 5],
-            padding="same",
-            activation=tf.nn.relu)
-        pool2 = tf.layers.max_pooling2d(inputs=conv2, pool_size=[2, 2], strides=2)
-        pool2_flat = tf.reshape(pool2, [-1, 7 * 7 * 64])
-        dense = tf.layers.dense(inputs=pool2_flat, units=2048, activation=tf.nn.relu)
-        logits = tf.layers.dense(inputs=dense, units=self.num_classes)
-        predictions = {
-          "classes": tf.argmax(input=logits, axis=1),
-          "probabilities": tf.nn.softmax(logits, name="softmax_tensor")
-        }
-        loss = tf.losses.sparse_softmax_cross_entropy(labels=labels, logits=logits)
-        # TODO: Confirm that opt initialized once is ok?
-        train_op = self.optimizer.minimize(
-            loss=loss,
-            global_step=tf.train.get_global_step())
-        eval_metric_ops = tf.count_nonzero(tf.equal(labels, predictions["classes"]))
-        return features, labels, train_op, eval_metric_ops, loss
+        self.loss_fn = nn.CrossEntropyLoss()
+        
+        super().__post_init__()
+
+    def forward(self, features, labels):
+        input_layer = features.reshape(-1, 1, IMAGE_SIZE, IMAGE_SIZE)
+        conv1 = self.relu(self.conv1(input_layer))
+        pool1 = self.pool1(conv1)
+        conv2 = self.relu(self.conv2(pool1))
+        pool2 = self.pool2(conv2)
+        pool2_flat = pool2.reshape(-1, 7 * 7 * 64)
+
+        dense = self.relu(self.l1(pool2_flat))
+        logits = self.l2(dense)
+
+        loss = self.loss_fn(logits, labels)
+        return logits, loss
 
     def process_x(self, raw_x_batch):
-        return np.array(raw_x_batch)
+        return torch.FloatTensor(raw_x_batch).cuda()
 
     def process_y(self, raw_y_batch):
-        return np.array(raw_y_batch)
+        return torch.LongTensor(raw_y_batch).cuda()
+
+

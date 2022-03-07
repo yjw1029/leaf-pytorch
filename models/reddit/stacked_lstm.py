@@ -1,23 +1,28 @@
-import collections
-import numpy as np
-import os
 import pickle
-import sys
-import tensorflow as tf
+import numpy as np
+import collections
 
-from tensorflow.contrib import rnn
+import torch
+from torch import nn
 
 from model import Model
 
+
 VOCABULARY_PATH = '../data/reddit/vocab/reddit_vocab.pck'
 
+def acc_fn(y_true, y_hat, unk_symbol, pad_symbol):
+    y_hat = torch.argmax(y_hat, dim=-1)
+    unk_cnt = torch.sum((y_true == unk_symbol) & (y_true == y_hat))
+    pad_cnt = torch.sum((y_true == pad_symbol) & (y_true == y_hat))
+    hit = torch.sum(y_true == y_hat)
 
-# Code adapted from https://github.com/tensorflow/models/blob/master/tutorials/rnn/ptb/ptb_word_lm.py
-# and https://r2rt.com/recurrent-neural-networks-in-tensorflow-iii-variable-length-sequences.html
+    return hit - unk_cnt - pad_cnt
+
+
 class ClientModel(Model):
-    def __init__(self, seed, lr, seq_len, n_hidden, num_layers,
+    def __init__(self, seed, lr, seq_len, n_hidden, num_layers, 
         keep_prob=1.0, max_grad_norm=5, init_scale=0.1):
-
+        super().__init__(seed, lr)
         self.seq_len = seq_len
         self.n_hidden = n_hidden
         self.num_layers = num_layers
@@ -27,92 +32,30 @@ class ClientModel(Model):
         # initialize vocabulary
         self.vocab, self.vocab_size, self.unk_symbol, self.pad_symbol = self.load_vocab()
 
-        self.initializer = tf.random_uniform_initializer(-init_scale, init_scale)
+        self.word_embedding = nn.Embedding(self.vocab_size, self.n_hidden)
+        self.lstm = nn.LSTM(input_size=self.n_hidden, hidden_size=self.n_hidden, num_layers=1,
+            batch_first=True, dropout=1-self.keep_prob)
+        self.pred = nn.Linear(self.n_hidden, self.vocab_size)
 
-        super(ClientModel, self).__init__(seed, lr)
+        self.loss_fn = nn.CrossEntropyLoss(ignore_index=self.pad_symbol)
 
-    def create_model(self):
+        super().__post_init__()
 
-        with tf.variable_scope('language_model', reuse=None, initializer=self.initializer):
-            features = tf.placeholder(tf.int32, [None, self.seq_len], name='features')
-            labels = tf.placeholder(tf.int32, [None, self.seq_len], name='labels')
-            self.sequence_length_ph = tf.placeholder(tf.int32, [None], name='seq_len_ph')
-            self.sequence_mask_ph = tf.placeholder(tf.float32, [None, self.seq_len], name='seq_mask_ph')
+    def forward(self, features, labels, sequence_length_ph, sequence_mask_ph):
+        batch_size = features.size(0)
 
-            self.batch_size = tf.shape(features)[0]
+        inputs = self.word_embedding(features)
+        packed_inputs = nn.utils.rnn.pack_padded_sequence(inputs, sequence_length_ph,
+            batch_first=True, enforce_sorted=False)
+        output, _ = self.lstm(packed_inputs)
+        output, _ = nn.utils.rnn.pad_packed_sequence(output, batch_first=True, total_length=self.seq_len)
+        logits = self.pred(output) 
 
-            # word embedding
-            embedding = tf.get_variable(
-                'embedding', [self.vocab_size, self.n_hidden], dtype=tf.float32)
-            inputs = tf.nn.embedding_lookup(embedding, features)
+        reshaped_logits = logits.reshape(batch_size * self.seq_len, self.vocab_size)
+        reshaped_labels = labels.reshape(-1)
 
-            # LSTM
-            output, state = self._build_rnn_graph(inputs) # TODO: check!
-
-            # softmax
-            with tf.variable_scope('softmax'):
-                softmax_w = tf.get_variable(
-                    'softmax_w', [self.n_hidden, self.vocab_size], dtype=tf.float32)
-                softmax_b = tf.get_variable('softmax_b', [self.vocab_size], dtype=tf.float32)
-            
-            logits = tf.nn.xw_plus_b(output, softmax_w, softmax_b)
-
-            # correct predictions
-            labels_reshaped = tf.reshape(labels, [-1])
-            pred = tf.cast(tf.argmax(logits, 1), tf.int32)
-            correct_pred = tf.cast(tf.equal(pred, labels_reshaped), tf.int32)
-            
-            # predicting unknown is always considered wrong
-            unk_tensor = tf.fill(tf.shape(labels_reshaped), self.unk_symbol)
-            pred_unk = tf.cast(tf.equal(pred, unk_tensor), tf.int32)
-            correct_unk = tf.multiply(pred_unk, correct_pred)
-
-            # predicting padding is always considered wrong
-            pad_tensor = tf.fill(tf.shape(labels_reshaped), 0)
-            pred_pad = tf.cast(tf.equal(pred, pad_tensor), tf.int32)
-            correct_pad = tf.multiply(pred_pad, correct_pred)
-
-            # Reshape logits to be a 3-D tensor for sequence loss
-            logits = tf.reshape(logits, [-1, self.seq_len, self.vocab_size])
-
-            # Use the contrib sequence loss and average over the batches
-            loss = tf.contrib.seq2seq.sequence_loss(
-                logits,
-                labels,
-                weights=self.sequence_mask_ph,
-                average_across_timesteps=False,
-                average_across_batch=True)
-
-            # Update the cost
-            #self.cost = tf.reduce_sum(loss)
-            self.cost = tf.reduce_mean(loss)
-            self.final_state = state
-
-            tvars = tf.trainable_variables()
-            grads, _ = tf.clip_by_global_norm(tf.gradients(self.cost, tvars), self.max_grad_norm)
-            train_op = self.optimizer.apply_gradients(
-                zip(grads, tvars),
-                global_step=tf.train.get_or_create_global_step())
-
-            eval_metric_ops = tf.count_nonzero(correct_pred) - tf.count_nonzero(correct_unk) - tf.count_nonzero(correct_pad)
-
-        return features, labels, train_op, eval_metric_ops, self.cost
-
-    def _build_rnn_graph(self, inputs):
-        def make_cell():
-            cell = tf.contrib.rnn.LSTMBlockCell(self.n_hidden, forget_bias=0.0)
-            if self.keep_prob < 1:
-                cell = tf.nn.rnn_cell.DropoutWrapper(cell, output_keep_prob=self.keep_prob)
-            return cell
-
-        cell = tf.nn.rnn_cell.MultiRNNCell(
-            [make_cell() for _ in range(self.num_layers)], state_is_tuple=True)
-
-        self.initial_state = cell.zero_state(self.batch_size, tf.float32)
-        outputs, state = tf.nn.dynamic_rnn(
-            cell, inputs, initial_state=self.initial_state, sequence_length=self.sequence_length_ph)
-        output = tf.reshape(tf.concat(outputs, 1), [-1, self.n_hidden])
-        return output, state
+        loss = self.loss_fn(reshaped_logits, reshaped_labels)
+        return logits, loss
 
     def process_x(self, raw_x_batch):
         tokens = self._tokens_to_ids([s for s in raw_x_batch])
@@ -167,63 +110,12 @@ class ClientModel(Model):
             input_data, input_lengths = self.process_x(batched_x)
             target_data = self.process_y(batched_y)
 
+            input_data = torch.LongTensor(input_data).cuda()
+            target_data = torch.LongTensor(target_data).cuda()
+            input_lengths = torch.LongTensor(input_lengths)
+            batched_mask = torch.FloatTensor(batched_mask).cuda()
+
             yield (input_data, target_data, input_lengths, batched_mask)
-
-    def run_epoch(self, data, batch_size=5):
-        state = None
-
-        fetches = {
-            'cost': self.cost,
-            'final_state': self.final_state,
-        }
-
-        for input_data, target_data, input_lengths, input_mask in self.batch_data(data, batch_size):
-
-            feed_dict = {
-                self.features: input_data,
-                self.labels: target_data,
-                self.sequence_length_ph: input_lengths,
-                self.sequence_mask_ph: input_mask,
-            }
-
-            # We need to feed the input data so that the batch size can be inferred.
-            if state is None:
-                state = self.sess.run(self.initial_state, feed_dict=feed_dict)
-
-            for i, (c, h) in enumerate(self.initial_state):
-                feed_dict[c] = state[i].c
-                feed_dict[h] = state[i].h
-
-            with self.graph.as_default():
-                _, vals = self.sess.run([self.train_op, fetches], feed_dict=feed_dict)
-            
-            state = vals['final_state']
-
-    def test(self, data, batch_size=5):
-        tot_acc, tot_samples = 0, 0
-        tot_loss, tot_batches = 0, 0
-
-        for input_data, target_data, input_lengths, input_mask in self.batch_data(data, batch_size):
-
-            with self.graph.as_default():
-                acc, loss = self.sess.run(
-                    [self.eval_metric_ops, self.loss], 
-                    feed_dict={
-                        self.features: input_data,
-                        self.labels: target_data,
-                        self.sequence_length_ph: input_lengths, 
-                        self.sequence_mask_ph: input_mask,
-                    })
-            
-            tot_acc += acc
-            tot_samples += np.sum(input_lengths)
-
-            tot_loss += loss
-            tot_batches += 1
-
-        acc = float(tot_acc) / tot_samples # this top 1 accuracy considers every pred. of unknown and padding as wrong
-        loss = tot_loss / tot_batches # the loss is already averaged over samples
-        return {'accuracy': acc, 'loss': loss}
 
     def load_vocab(self):
         vocab_file = pickle.load(open(VOCABULARY_PATH, 'rb'))
@@ -232,3 +124,30 @@ class ClientModel(Model):
 
         return vocab, vocab_file['size'], vocab_file['unk_symbol'], vocab_file['pad_symbol']
 
+    def test(self, data, batch_size=5):
+        tot_acc, tot_samples = 0, 0
+        tot_loss, tot_batches = 0, 0
+
+        self.eval()
+        with torch.no_grad():
+            for input_data, target_data, input_lengths, input_mask in self.batch_data(data, batch_size):
+                logits, loss = self.forward(input_data, target_data, input_lengths, input_mask)
+                
+                tot_acc += acc_fn(target_data, logits, unk_symbol=self.unk_symbol, pad_symbol=self.pad_symbol).detach().cpu().numpy()
+                tot_samples += np.sum(input_lengths.detach().cpu().numpy())
+
+                tot_loss += loss.detach().cpu().numpy()
+                tot_batches += 1
+
+        acc = float(tot_acc) / tot_samples # this top 1 accuracy considers every pred. of unknown and padding as wrong
+        loss = tot_loss / tot_batches # the loss is already averaged over samples
+        return {'accuracy': acc, 'loss': loss}
+
+    def run_epoch(self, data, batch_size=5):
+        self.train()
+        for input_data, target_data, input_lengths, input_mask in self.batch_data(data, batch_size):
+            self.optimizer.zero_grad()
+
+            logits, loss = self.forward(input_data, target_data, input_lengths, input_mask)
+            loss.backward()
+            self.optimizer.step()

@@ -1,10 +1,7 @@
 import random
-import warnings
-
 
 class Client:
-    
-    def __init__(self, client_id, group=None, train_data={'x' : [],'y' : []}, eval_data={'x' : [],'y' : []}, model=None):
+    def __init__(self, client_id, group=None, train_data={'x': [], 'y': []}, eval_data={'x' : [],'y' : []}, model=None):
         self._model = model
         self.id = client_id
         self.group = group
@@ -27,7 +24,7 @@ class Client:
         """
         if minibatch is None:
             data = self.train_data
-            comp, update = self.model.train(data, num_epochs, batch_size)
+            comp, update = self.model.train_model(data, num_epochs, batch_size)
         else:
             frac = min(1.0, minibatch)
             num_data = max(1, int(frac*len(self.train_data["x"])))
@@ -36,7 +33,7 @@ class Client:
 
             # Minibatch trains for only 1 epoch - multiple local epochs don't make sense!
             num_epochs = 1
-            comp, update = self.model.train(data, num_epochs, num_data)
+            comp, update = self.model.train_model(data, num_epochs, num_data)
         num_train_samples = len(data['y'])
         return comp, num_train_samples, update
 
@@ -97,9 +94,3 @@ class Client:
     def model(self):
         """Returns this client reference to model being trained"""
         return self._model
-
-    @model.setter
-    def model(self, model):
-        warnings.warn('The current implementation shares the model among all clients.'
-                      'Setting it on one client will effectively modify all clients.')
-        self._model = model

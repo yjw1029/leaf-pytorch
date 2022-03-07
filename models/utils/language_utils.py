@@ -24,7 +24,7 @@ def letter_to_vec(letter):
     '''returns one-hot representation of given letter
     '''
     index = ALL_LETTERS.find(letter)
-    return _one_hot(index, NUM_LETTERS)
+    return index
 
 
 def word_to_indices(word):

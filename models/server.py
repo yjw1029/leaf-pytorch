@@ -1,12 +1,15 @@
 import numpy as np
+import torch
+from tqdm import tqdm
+from collections import OrderedDict
 
 from baseline_constants import BYTES_WRITTEN_KEY, BYTES_READ_KEY, LOCAL_COMPUTATIONS_KEY
 
 class Server:
-    
-    def __init__(self, client_model):
-        self.client_model = client_model
-        self.model = client_model.get_params()
+    def __init__(self, args, global_model):
+        self.args = args
+        self.global_model = global_model
+        self.model = global_model.get_params()
         self.selected_clients = []
         self.updates = []
 
@@ -68,15 +71,34 @@ class Server:
         return sys_metrics
 
     def update_model(self):
-        total_weight = 0.
-        base = [0] * len(self.updates[0][1])
-        for (client_samples, client_model) in self.updates:
-            total_weight += client_samples
-            for i, v in enumerate(client_model):
-                base[i] += (client_samples * v.astype(np.float64))
-        averaged_soln = [v / total_weight for v in base]
+        avg_param = OrderedDict()
+        if self.args.agg_fn == "none-uniform":
+            total_weight = 0.
+            for (client_samples, client_model) in self.updates:
+                total_weight += client_samples
+                for name, param in client_model.items():
+                    if name not in avg_param:
+                        avg_param[name] = client_samples * param
+                    else:
+                        avg_param[name] += client_samples * param
 
-        self.model = averaged_soln
+            for name in avg_param:
+                avg_param[name] = avg_param[name] / total_weight 
+        elif self.args.agg_fn == "uniform":
+            total_weight = 0.
+            for (client_samples, client_model) in self.updates:
+                total_weight += 1.
+                for name, param in client_model.items():
+                    if name not in avg_param:
+                        avg_param[name] = param
+                    else:
+                        avg_param[name] += param
+
+            for name in avg_param:
+                avg_param[name] = avg_param[name] / total_weight 
+
+        self.model = avg_param
+        self.global_model.load_state_dict(self.model)
         self.updates = []
 
     def test_model(self, clients_to_test, set_to_use='test'):
@@ -93,7 +115,7 @@ class Server:
         if clients_to_test is None:
             clients_to_test = self.selected_clients
 
-        for client in clients_to_test:
+        for client in tqdm(clients_to_test):
             client.model.set_params(self.model)
             c_metrics = client.test(set_to_use)
             metrics[client.id] = c_metrics
@@ -118,10 +140,4 @@ class Server:
 
     def save_model(self, path):
         """Saves the server model on checkpoints/dataset/model.ckpt."""
-        # Save server model
-        self.client_model.set_params(self.model)
-        model_sess =  self.client_model.sess
-        return self.client_model.saver.save(model_sess, path)
-
-    def close_model(self):
-        self.client_model.close()
+        return torch.save({"model_state_dict": self.model}, path)
