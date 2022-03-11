@@ -4,6 +4,7 @@ from tqdm import tqdm
 from collections import OrderedDict
 
 from baseline_constants import BYTES_WRITTEN_KEY, BYTES_READ_KEY, LOCAL_COMPUTATIONS_KEY
+from agg import uniform, none_uniform, median, trimmed_mean, krum, multi_krum
 
 class Server:
     def __init__(self, args, global_model):
@@ -71,31 +72,17 @@ class Server:
         return sys_metrics
 
     def update_model(self):
-        avg_param = OrderedDict()
         if self.args.agg_fn == "none-uniform":
-            total_weight = 0.
-            for (client_samples, client_model) in self.updates:
-                total_weight += client_samples
-                for name, param in client_model.items():
-                    if name not in avg_param:
-                        avg_param[name] = client_samples * param
-                    else:
-                        avg_param[name] += client_samples * param
-
-            for name in avg_param:
-                avg_param[name] = avg_param[name] / total_weight 
+            avg_param = none_uniform(self.updates)
         elif self.args.agg_fn == "uniform":
-            total_weight = 0.
-            for (client_samples, client_model) in self.updates:
-                total_weight += 1.
-                for name, param in client_model.items():
-                    if name not in avg_param:
-                        avg_param[name] = param
-                    else:
-                        avg_param[name] += param
+            avg_param = uniform(self.updates)
+        elif self.args.agg_fn == "median":
+            avg_param = median(self.updates)
+        elif self.args.agg_fn == "trimmed-mean":
+            avg_param = trimmed_mean(self.updates, k=self.args.trimmed_mean_beta)
+        elif self.args.agg_fn == "krum":
+            avg_param = krum(self.updates, self.model, krum_mal_num=self.args.krum_mal_num)
 
-            for name in avg_param:
-                avg_param[name] = avg_param[name] / total_weight 
 
         self.model = avg_param
         self.global_model.load_state_dict(self.model)

@@ -33,7 +33,7 @@ class ClientModel(Model):
         self.vocab, self.vocab_size, self.unk_symbol, self.pad_symbol = self.load_vocab()
 
         self.word_embedding = nn.Embedding(self.vocab_size, self.n_hidden)
-        self.lstm = nn.LSTM(input_size=self.n_hidden, hidden_size=self.n_hidden, num_layers=1,
+        self.lstm = nn.LSTM(input_size=self.n_hidden, hidden_size=self.n_hidden, num_layers=self.num_layers,
             batch_first=True, dropout=1-self.keep_prob)
         self.pred = nn.Linear(self.n_hidden, self.vocab_size)
 

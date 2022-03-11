@@ -106,4 +106,27 @@ def parse_args():
                     default=-1,
                     required=False)
 
+    # robust aggregation hyper-param
+    parser.add_argument(
+        "--trimmed-mean-beta",
+        help="Number of params to filter in trimmed mean",
+        type=int,
+        default=1,
+        required=False
+    )
+    parser.add_argument(
+        "--krum-mal-num",
+        help="Number of estimated number of malicious clients in krum",
+        type=int,
+        default=1,
+        required=False
+    )
+    parser.add_argument(
+        "--multi-krum-num",
+        help="Number of cients selected in multi-krum",
+        type=int,
+        default=1,
+        required=False
+    )
+
     return parser.parse_args()

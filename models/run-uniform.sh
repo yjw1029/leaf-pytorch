@@ -34,6 +34,6 @@ then
     --clients-per-round 10 --num-epochs ${num_epochs} -lr 0.8 --wandb-run uniform --agg-fn uniform
 elif [ $dataset == "reddit" ]
 then
-    python3 main.py -dataset reddit -model stacked_lstm --eval-every 10 --num-rounds 100 --clients-per-round 10 \
+    CUDA_VISIBLE_DEVICES=3 python3 main.py -dataset reddit -model stacked_lstm --eval-every 10 --num-rounds 1000 --clients-per-round 10 \
     --batch-size 5 -lr 5.65 --metrics-name reddit_experiment --wandb-run uniform --agg-fn uniform
 fi
